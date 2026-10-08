@@ -12,6 +12,11 @@ const rl = readline.createInterface(process.stdin, process.stdout);
 let worker = null;
 let running = false;
 let restartTimer = null;
+let crashCount = 0;
+
+const BASE_DELAY_MS = 2000;
+const MAX_DELAY_MS = 60 * 1000;
+const STABLE_UPTIME_MS = 60 * 1000;
 
 function start(file) {
 	if (running) return;
@@ -20,6 +25,8 @@ function start(file) {
 
 	if (worker) worker.terminate();
 	worker = new Worker(full);
+	const current = worker;
+	const startedAt = Date.now();
 	if (restartTimer) {
 		clearTimeout(restartTimer);
 		restartTimer = null;
@@ -35,15 +42,26 @@ function start(file) {
 
 	worker.on('exit', (code) => {
 		console.log('❗ Worker exited with code', code);
+		// Ignore exits from a superseded worker (e.g. terminated by restart())
+		if (current !== worker) return;
 		running = false;
+
+		if (Date.now() - startedAt > STABLE_UPTIME_MS) {
+			crashCount = 0;
+		}
+
 		if (code !== 0) {
-			restartTimer = setTimeout(
-				() => {
-					console.log('⏳ Auto restart...');
-					restart();
-				},
-				30 * 60 * 1000
+			crashCount++;
+			const delay = Math.min(
+				BASE_DELAY_MS * 2 ** (crashCount - 1),
+				MAX_DELAY_MS
 			);
+			if (restartTimer) clearTimeout(restartTimer);
+			console.log(`⏳ Restarting in ${delay} ms (attempt ${crashCount})`);
+			restartTimer = setTimeout(() => {
+				restartTimer = null;
+				restart();
+			}, delay);
 		}
 		watchFile(full, () => {
 			unwatchFile(full);
